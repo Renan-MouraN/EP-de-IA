@@ -1,0 +1,1 @@
+hidden: 75lr: 0.05epochs: 200patience: 10cv_acc: 0.9272268907563026

@@ -14,11 +14,11 @@ Y_NPY_PATH = 'Y_classe.npy'   # caminho do arquivo Y_classe.npy (shape: N,26)
 OUTDIR     = 'output'         # diretório de saída
 TEST_SIZE  = 130              # número de amostras no conjunto de teste (últimas 130)
 SEED       = 42              # semente aleatória
-CV_FOLDS   = 5               # número de folds para cross-validation
+CV_FOLDS   = 10               # número de folds para cross-validation
 
-# Parâmetros para grid search
-GRID_HIDDEN   = [25, 50, 75, 100]
-GRID_LR       = [0.005, 0.01, 0.05, 0.1]
+# Parâmetros para grid search (valores recomendados)
+GRID_HIDDEN   = [75, 100]
+GRID_LR       = [0.005, 0.01, 0.05]
 GRID_EPOCHS   = [50, 100, 200]
 GRID_PATIENCE = [3, 5, 10]
 # ============================
@@ -185,6 +185,10 @@ if __name__ == '__main__':
     X_train, Y_train, X_test, Y_test = train_test_split(X, Y, TEST_SIZE)
     # grid search com cross-validation no conjunto de treino
     best_cfg = grid_search(X_train, Y_train)
+    # grava hiperparâmetros escolhidos
+    with open(os.path.join(OUTDIR, 'dataset_best_hyperparams.txt'), 'w') as f:
+        for k, v in best_cfg.items():
+            f.write(f"{k}: {v}\n")
     # treino final com melhor configuração
     model = MLP(X_train.shape[1], best_cfg['hidden'], Y.shape[1],
                 best_cfg['lr'], SEED, best_cfg['patience'], best_cfg['epochs'])
