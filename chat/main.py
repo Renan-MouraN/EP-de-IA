@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 USE_CV = True            # False desabilita grid search + CV
 USE_EARLY_STOP = True    # False desabilita early stopping
 # Configuração padrão de hiperparâmetros se USE_CV=False
-DEFAULT_CFG = {'hidden': 75, 'lr': 0.05, 'epochs': 50, 'patience': None}
+DEFAULT_CFG = {'hidden': 75, 'lr': 0.05, 'epochs': 50, 'patience': 5}
 
 # ======= Parâmetros ========
 X_NPY_PATH = 'X.npy'          # caminho do arquivo X.npy (shape: N,10,12,1)
@@ -26,7 +26,7 @@ CV_FOLDS   = 5               # número de folds para cross-validation
 # Parâmetros para grid search (valores recomendados)
 GRID_HIDDEN   = [50]      # testar maior capacidade de camada oculta
 GRID_LR       = [0.01]  # taxas de aprendizado menores/padrão
-GRID_EPOCHS   = [50, 100]     # épocas para permitir melhor convergência
+GRID_EPOCHS   = [50]     # épocas para permitir melhor convergência
 GRID_PATIENCE = [5]         # paciências variadas para early stopping
 # ============================
 
