@@ -1,5 +1,7 @@
+n_inputs: 120
+n_outputs: 26
 hidden: 20
 lr: 0.01
-epochs: 100
+epochs: 50
 patience: 5
-cv_acc: 0.8996687587168759
+cv_acc: 0.897995118549512

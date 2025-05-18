@@ -20,7 +20,7 @@ CV_FOLDS   = 5               # número de folds para cross-validation
 # Parâmetros para grid search (valores recomendados)
 GRID_HIDDEN   = [20]      # testar maior capacidade de camada oculta
 GRID_LR       = [0.01]  # taxas de aprendizado menores/padrão
-GRID_EPOCHS   = [100]     # épocas para permitir melhor convergência
+GRID_EPOCHS   = [50]     # épocas para permitir melhor convergência
 GRID_PATIENCE = [5]         # paciências variadas para early stopping
 # ============================
 
@@ -191,11 +191,17 @@ if __name__ == '__main__':
     logging.info(f"Grid search concluído em {grid_time:.2f}s")
     # salva tempo de grid search
     with open(os.path.join(OUTDIR, 'dataset_best_times.txt'), 'w') as f:
-        f.write(f"grid_search_time: {grid_time:.2f}s\n")
-    # grava hiperparâmetros escolhidos
+        f.write(f"grid_search_time: {grid_time:.2f}s")
+
+    # grava hiperparâmetros escolhidos incluindo dimensões de entrada/saída
+    n_inputs = X_train.shape[1]
+    n_outputs = Y.shape[1]
     with open(os.path.join(OUTDIR, 'dataset_best_hyperparams.txt'), 'w') as f:
+        f.write(f"n_inputs: {n_inputs}\n")
+        f.write(f"n_outputs: {n_outputs}\n")
         for k, v in best_cfg.items():
             f.write(f"{k}: {v}\n")
+
     # treino final com melhor configuração
     model = MLP(X_train.shape[1], best_cfg['hidden'], Y.shape[1],
                 best_cfg['lr'], SEED, best_cfg['patience'], best_cfg['epochs'])
