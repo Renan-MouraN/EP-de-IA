@@ -9,6 +9,12 @@ from itertools import product
 type(logging)  # prevent unused import warning
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# ========== Flgs ===========
+USE_CV = True            # False desabilita grid search + CV
+USE_EARLY_STOP = True    # False desabilita early stopping
+# Configuração padrão de hiperparâmetros se USE_CV=False
+DEFAULT_CFG = {'hidden': 75, 'lr': 0.05, 'epochs': 50, 'patience': None}
+
 # ======= Parâmetros ========
 X_NPY_PATH = 'X.npy'          # caminho do arquivo X.npy (shape: N,10,12,1)
 Y_NPY_PATH = 'Y_classe.npy'   # caminho do arquivo Y_classe.npy (shape: N,26)
@@ -18,9 +24,9 @@ SEED       = 42              # semente aleatória
 CV_FOLDS   = 5               # número de folds para cross-validation
 
 # Parâmetros para grid search (valores recomendados)
-GRID_HIDDEN   = [20]      # testar maior capacidade de camada oculta
+GRID_HIDDEN   = [50]      # testar maior capacidade de camada oculta
 GRID_LR       = [0.01]  # taxas de aprendizado menores/padrão
-GRID_EPOCHS   = [50]     # épocas para permitir melhor convergência
+GRID_EPOCHS   = [50, 100]     # épocas para permitir melhor convergência
 GRID_PATIENCE = [5]         # paciências variadas para early stopping
 # ============================
 
@@ -184,14 +190,25 @@ if __name__ == '__main__':
     X, Y = load_data()
     # split: últimos TEST_SIZE para teste
     X_train, Y_train, X_test, Y_test = train_test_split(X, Y, TEST_SIZE)
-    # grid search com cross-validation no conjunto de treino
+
     start_grid = time.time()
-    best_cfg = grid_search(X_train, Y_train)
+    # seleção de hiperparâmetros
+    if USE_CV:
+        best_cfg = grid_search(X_train, Y_train)
+    else:
+        best_cfg = DEFAULT_CFG
+    logging.info(f"Parâmetros selecionados: {best_cfg}")
+
+    # desabilita early stopping se USE_EARLY_STOP=False
+    if not USE_EARLY_STOP:
+        best_cfg['patience'] = None
+
+    # treino final com melhor configuração
     grid_time = time.time() - start_grid
     logging.info(f"Grid search concluído em {grid_time:.2f}s")
     # salva tempo de grid search
     with open(os.path.join(OUTDIR, 'dataset_best_times.txt'), 'w') as f:
-        f.write(f"grid_search_time: {grid_time:.2f}s")
+        f.write(f"grid_search_time: {grid_time:.2f}s\n")
 
     # grava hiperparâmetros escolhidos incluindo dimensões de entrada/saída
     n_inputs = X_train.shape[1]

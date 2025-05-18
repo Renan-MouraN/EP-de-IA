@@ -1,0 +1,7 @@
+n_inputs: 120
+n_outputs: 26
+hidden: 75
+lr: 0.05
+epochs: 50
+patience: 10
+cv_acc: 0.917231520223152

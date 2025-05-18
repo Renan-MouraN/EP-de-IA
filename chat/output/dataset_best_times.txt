@@ -1,1 +1,2 @@
-grid_search_time: 30.03sfinal_train_time: 7.94s
+grid_search_time: 62.90s
+final_train_time: 9.07s
