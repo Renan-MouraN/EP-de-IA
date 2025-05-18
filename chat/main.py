@@ -1,4 +1,5 @@
 import numpy as np
+import time
 import os
 import csv
 import logging
@@ -14,13 +15,13 @@ Y_NPY_PATH = 'Y_classe.npy'   # caminho do arquivo Y_classe.npy (shape: N,26)
 OUTDIR     = 'output'         # diretório de saída
 TEST_SIZE  = 130              # número de amostras no conjunto de teste (últimas 130)
 SEED       = 42              # semente aleatória
-CV_FOLDS   = 10               # número de folds para cross-validation
+CV_FOLDS   = 5               # número de folds para cross-validation
 
 # Parâmetros para grid search (valores recomendados)
-GRID_HIDDEN   = [75, 100]
-GRID_LR       = [0.005, 0.01, 0.05]
-GRID_EPOCHS   = [50, 100, 200]
-GRID_PATIENCE = [3, 5, 10]
+GRID_HIDDEN   = [20]      # testar maior capacidade de camada oculta
+GRID_LR       = [0.01]  # taxas de aprendizado menores/padrão
+GRID_EPOCHS   = [100]     # épocas para permitir melhor convergência
+GRID_PATIENCE = [5]         # paciências variadas para early stopping
 # ============================
 
 class MLP:
@@ -184,7 +185,13 @@ if __name__ == '__main__':
     # split: últimos TEST_SIZE para teste
     X_train, Y_train, X_test, Y_test = train_test_split(X, Y, TEST_SIZE)
     # grid search com cross-validation no conjunto de treino
+    start_grid = time.time()
     best_cfg = grid_search(X_train, Y_train)
+    grid_time = time.time() - start_grid
+    logging.info(f"Grid search concluído em {grid_time:.2f}s")
+    # salva tempo de grid search
+    with open(os.path.join(OUTDIR, 'dataset_best_times.txt'), 'w') as f:
+        f.write(f"grid_search_time: {grid_time:.2f}s\n")
     # grava hiperparâmetros escolhidos
     with open(os.path.join(OUTDIR, 'dataset_best_hyperparams.txt'), 'w') as f:
         for k, v in best_cfg.items():
@@ -196,7 +203,13 @@ if __name__ == '__main__':
     prefix = os.path.join(OUTDIR, 'dataset_best')
     np.save(prefix + '_weights_initial_W1.npy', model.W1)
     np.save(prefix + '_weights_initial_W2.npy', model.W2)
+    start_train = time.time()
     model.train(X_train, Y_train)
+    train_time = time.time() - start_train
+    logging.info(f"Treino final concluído em {train_time:.2f}s")
+    # anexa tempo de treino final
+    with open(os.path.join(OUTDIR, 'dataset_best_times.txt'), 'a') as f:
+        f.write(f"final_train_time: {train_time:.2f}s")
     np.save(prefix + '_weights_final_W1.npy', model.W1)
     np.save(prefix + '_weights_final_W2.npy', model.W2)
     # avaliação no teste
