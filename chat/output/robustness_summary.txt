@@ -1,5 +1,5 @@
-CV Accuracy Mean: 0.9172
-CV Accuracy Std:  0.0130
-Test Accuracy:    0.7231
-Grid Time:        2327.47s
-Final Train Time: 10.77s
+CV Accuracy Mean: 0.9080
+CV Accuracy Std:  0.0079
+Test Accuracy:    0.6923
+Grid Time:        34.81s
+Final Train Time: 10.71s

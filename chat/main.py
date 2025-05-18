@@ -221,7 +221,15 @@ def evaluate_and_save(model, X_test, Y_test, prefix):
     acc = np.mean((preds == Y_test).all(axis=1))
     with open(prefix + '_accuracy.txt', 'w') as f:
         f.write(f"accuracy: {acc:.4f}\n")
-    return cm, acc
+    # precisão e recall por classe
+    tp = np.diag(cm).astype(float)
+    precision = np.divide(tp, cm.sum(axis=0, dtype=float), out=np.zeros_like(tp), where=cm.sum(axis=0)!=0)
+    recall    = np.divide(tp, cm.sum(axis=1, dtype=float), out=np.zeros_like(tp), where=cm.sum(axis=1)!=0)
+    # salva precisão e recall
+    np.savetxt(prefix + '_precision.csv', precision, delimiter=',', fmt='%.4f', header='precision', comments='')
+    np.savetxt(prefix + '_recall.csv',    recall,    delimiter=',', fmt='%.4f', header='recall',    comments='')
+    
+    return cm, acc, precision, recall
 
 # ========== Fluxo principal ===========
 if __name__ == '__main__':
@@ -275,7 +283,7 @@ if __name__ == '__main__':
     np.save(prefix + '_weights_final_W2.npy', model.W2)
 
     # avaliação no conjunto de teste
-    cm, acc = evaluate_and_save(model, X_test, Y_test, prefix)
+    cm, acc, precision, recall = evaluate_and_save(model, X_test, Y_test, prefix)
     logging.info(f"Test accuracy: {acc:.4f}")
 
     # resumo de robustez final: salva métricas em arquivo
