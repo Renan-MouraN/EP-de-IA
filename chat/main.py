@@ -6,7 +6,6 @@ import logging
 from itertools import product
 
 # Configuração do logger
-type(logging)  # prevent unused import warning
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # ========== Flgs ===========
@@ -20,14 +19,14 @@ X_NPY_PATH = 'X.npy'          # caminho do arquivo X.npy (shape: N,10,12,1)
 Y_NPY_PATH = 'Y_classe.npy'   # caminho do arquivo Y_classe.npy (shape: N,26)
 OUTDIR     = 'output'         # diretório de saída
 TEST_SIZE  = 130              # número de amostras no conjunto de teste (últimas 130)
-SEED       = 42              # semente aleatória
-CV_FOLDS   = 5               # número de folds para cross-validation
+SEED       = 42               # semente aleatória
+CV_FOLDS   = 5                # número de folds para cross-validation
 
 # Parâmetros para grid search (valores recomendados)
-GRID_HIDDEN   = [50]      # testar maior capacidade de camada oculta
-GRID_LR       = [0.01]  # taxas de aprendizado menores/padrão
-GRID_EPOCHS   = [50]     # épocas para permitir melhor convergência
-GRID_PATIENCE = [5]         # paciências variadas para early stopping
+GRID_HIDDEN   = [25, 50, 75, 100]      # testar maior capacidade de camada oculta
+GRID_LR       = [0.01, 0.05, 0.10]    # taxas de aprendizado menores/padrão
+GRID_EPOCHS   = [50, 100, 200]      # épocas para permitir melhor convergência
+GRID_PATIENCE = [3, 5, 10]       # paciências variadas para early stopping
 # ============================
 
 class MLP:
@@ -65,23 +64,17 @@ class MLP:
 
     def backprop_step(self, X, T):
         Y = self.feedforward(X)
-        # cross-entropy gradient: Y - T
         delta_out = Y - T
-        # hidden delta
         delta_hidden = self._activate_hidden_derivative(self.z) * (self.W2[:, :-1].T.dot(delta_out))
-        # atualiza W2 e W1
         self.W2 -= self.lr * np.outer(delta_out, np.append(self.z, 1.0))
         self.W1 -= self.lr * np.outer(delta_hidden, np.append(X, 1.0))
-        # retorna cross-entropy loss
         return -np.sum(T * np.log(Y + 1e-15))
 
     def train(self, X_train, Y_train, X_val=None, Y_val=None):
         best_val = float('inf')
         epochs_no_improve = 0
         for epoch in range(1, self.max_epochs + 1):
-            train_loss = 0.0
-            for x, t in zip(X_train, Y_train):
-                train_loss += self.backprop_step(x, t)
+            train_loss = sum(self.backprop_step(x, t) for x, t in zip(X_train, Y_train))
             val_loss = None
             if X_val is not None:
                 val_loss = sum(-np.sum(t * np.log(self.feedforward(x) + 1e-15))
@@ -94,12 +87,12 @@ class MLP:
                 if self.patience and epochs_no_improve >= self.patience:
                     self.W1, self.W2 = bestW1, bestW2
                     break
-            logging.info(f"Epoch {epoch}/{self.max_epochs} - train_loss: {train_loss:.4f}" + (f", val_loss: {val_loss:.4f}" if val_loss is not None else ''))
+            logging.info(f"Epoch {epoch}/{self.max_epochs} - train_loss: {train_loss:.4f}" +
+                         (f", val_loss: {val_loss:.4f}" if val_loss is not None else ''))
         return train_loss, val_loss
 
     def predict(self, X):
         out = self.feedforward(X)
-        # retorna one-hot com 1 na maior probabilidade
         vec = np.zeros_like(out)
         vec[np.argmax(out)] = 1
         return vec
@@ -114,12 +107,10 @@ def load_data():
     N = X.shape[0]
     X = X.reshape(N, -1)
     X = (X - X.mean(axis=0)) / X.std(axis=0)
-    # assume Y já one-hot de 0/1; converte para floats
     Y = Y.astype(float)
     return X, Y
 
 # split determinístico: últimos TEST_SIZE para teste
-
 def train_test_split(X, Y, test_size):
     X_test = X[-test_size:]
     Y_test = Y[-test_size:]
@@ -127,15 +118,12 @@ def train_test_split(X, Y, test_size):
     Y_train = Y[:-test_size]
     return X_train, Y_train, X_test, Y_test
 
-# cross-validation manual
-
+# cross-validation manual com estatísticas
 def cross_validate(X, Y, params):
-    N = X.shape[0]
-    indices = np.arange(N)
     np.random.seed(SEED)
-    np.random.shuffle(indices)
-    fold_sizes = (N // CV_FOLDS) * np.ones(CV_FOLDS, int)
-    fold_sizes[:N % CV_FOLDS] += 1
+    indices = np.random.permutation(len(X))
+    fold_sizes = (len(X) // CV_FOLDS) * np.ones(CV_FOLDS, int)
+    fold_sizes[:len(X) % CV_FOLDS] += 1
     current = 0
     scores = []
     for fold_size in fold_sizes:
@@ -150,22 +138,25 @@ def cross_validate(X, Y, params):
         acc = np.mean((model.predict_batch(X_val) == Y_val).all(axis=1))
         scores.append(acc)
         current = stop
-    return np.mean(scores)
+    return np.array(scores)
 
-# grid search com cross-validation
+# grid search com cross-validation e estatísticas de acurácia
 def grid_search(X, Y):
     results = []
     for hidden, lr, epochs, pat in product(GRID_HIDDEN, GRID_LR, GRID_EPOCHS, GRID_PATIENCE):
-        params = {'hidden':hidden, 'lr':lr, 'epochs':epochs, 'patience':pat}
-        cv_score = cross_validate(X, Y, params)
-        results.append({**params, 'cv_acc':cv_score})
+        params = {'hidden': hidden, 'lr': lr, 'epochs': epochs, 'patience': pat}
+        scores = cross_validate(X, Y, params)
+        mean_acc, std_acc = scores.mean(), scores.std()
+        results.append({**params, 'cv_acc_mean': mean_acc, 'cv_acc_std': std_acc})
     os.makedirs(OUTDIR, exist_ok=True)
     keys = results[0].keys()
     with open(os.path.join(OUTDIR, 'grid_search.csv'), 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=keys)
-        writer.writeheader(); writer.writerows(results)
-    best = max(results, key=lambda x: x['cv_acc'])
+        writer.writeheader()
+        writer.writerows(results)
+    best = max(results, key=lambda x: x['cv_acc_mean'])
     logging.info(f"Best CV config: {best}")
+    logging.info(f"CV Accuracy: {best['cv_acc_mean']:.4f} ± {best['cv_acc_std']:.4f}")
     return best
 
 # avaliação e salvamento da matriz de confusão e acurácia
@@ -188,29 +179,23 @@ def evaluate_and_save(model, X_test, Y_test, prefix):
 if __name__ == '__main__':
     os.makedirs(OUTDIR, exist_ok=True)
     X, Y = load_data()
-    # split: últimos TEST_SIZE para teste
     X_train, Y_train, X_test, Y_test = train_test_split(X, Y, TEST_SIZE)
 
     start_grid = time.time()
-    # seleção de hiperparâmetros
     if USE_CV:
         best_cfg = grid_search(X_train, Y_train)
     else:
         best_cfg = DEFAULT_CFG
     logging.info(f"Parâmetros selecionados: {best_cfg}")
 
-    # desabilita early stopping se USE_EARLY_STOP=False
     if not USE_EARLY_STOP:
         best_cfg['patience'] = None
 
-    # treino final com melhor configuração
     grid_time = time.time() - start_grid
     logging.info(f"Grid search concluído em {grid_time:.2f}s")
-    # salva tempo de grid search
     with open(os.path.join(OUTDIR, 'dataset_best_times.txt'), 'w') as f:
         f.write(f"grid_search_time: {grid_time:.2f}s\n")
 
-    # grava hiperparâmetros escolhidos incluindo dimensões de entrada/saída
     n_inputs = X_train.shape[1]
     n_outputs = Y.shape[1]
     with open(os.path.join(OUTDIR, 'dataset_best_hyperparams.txt'), 'w') as f:
@@ -219,22 +204,30 @@ if __name__ == '__main__':
         for k, v in best_cfg.items():
             f.write(f"{k}: {v}\n")
 
-    # treino final com melhor configuração
-    model = MLP(X_train.shape[1], best_cfg['hidden'], Y.shape[1],
-                best_cfg['lr'], SEED, best_cfg['patience'], best_cfg['epochs'])
-    # salva e depois treina
+    model = MLP(n_inputs, best_cfg['hidden'], n_outputs,
+                best_cfg['lr'], SEED, best_cfg.get('patience'), best_cfg['epochs'])
     prefix = os.path.join(OUTDIR, 'dataset_best')
     np.save(prefix + '_weights_initial_W1.npy', model.W1)
     np.save(prefix + '_weights_initial_W2.npy', model.W2)
+
     start_train = time.time()
     model.train(X_train, Y_train)
     train_time = time.time() - start_train
     logging.info(f"Treino final concluído em {train_time:.2f}s")
-    # anexa tempo de treino final
     with open(os.path.join(OUTDIR, 'dataset_best_times.txt'), 'a') as f:
-        f.write(f"final_train_time: {train_time:.2f}s")
+        f.write(f"final_train_time: {train_time:.2f}s\n")
     np.save(prefix + '_weights_final_W1.npy', model.W1)
     np.save(prefix + '_weights_final_W2.npy', model.W2)
-    # avaliação no teste
+
     cm, acc = evaluate_and_save(model, X_test, Y_test, prefix)
     logging.info(f"Test accuracy: {acc:.4f}")
+
+    # Avaliação final de robustez: resumo de métricas
+    robustness_path = os.path.join(OUTDIR, 'robustness_summary.txt')
+    with open(robustness_path, 'w') as f:
+        f.write(f"CV Accuracy Mean: {best_cfg.get('cv_acc_mean', float('nan')):.4f}\n")
+        f.write(f"CV Accuracy Std:  {best_cfg.get('cv_acc_std', float('nan')):.4f}\n")
+        f.write(f"Test Accuracy:    {acc:.4f}\n")
+        f.write(f"Grid Time:        {grid_time:.2f}s\n")
+        f.write(f"Final Train Time: {train_time:.2f}s\n")
+    logging.info("Robustness summary saved.")

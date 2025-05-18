@@ -1,288 +1,240 @@
+import numpy as np
+import time
 import os
 import csv
 import logging
 from itertools import product
 
-import numpy as np
+# Configuração do logger
+type(logging)  # prevent unused import warning
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Logger configuration
-def setup_logger(level=logging.INFO):
-    logging.basicConfig(level=level, format="%(asctime)s - %(levelname)s - %(message)s")
+# ========== Flgs ===========
+USE_CV = True            # False desabilita grid search + CV
+USE_EARLY_STOP = True    # False desabilita early stopping
+# Configuração padrão de hiperparâmetros se USE_CV=False
+DEFAULT_CFG = {'hidden': 75, 'lr': 0.05, 'epochs': 50, 'patience': 5}
 
-# ===== Configuration =====
-CONFIG = {
-    "X_PATH": "chat/X.npy",             # Features file (N, 10, 12, 1)
-    "Y_PATH": "chat/Y_classe.npy",      # Labels file (N, 26)
-    "OUTPUT_DIR": "output_comp",        # Output directory
-    "TEST_RATIO": 0.2,             # Proportion for test split
-    "SEED": 42,                    # Random seed
-    "CV_FOLDS": 5,                 # Cross-validation folds
-    
-    # Grid search parameters
-    "GRID_HIDDEN": [75, 100],
-    "GRID_LR": [0.01, 0.1],
-    "GRID_EPOCHS": [150],
-    "GRID_PATIENCE": [15]
-}
-# =========================
+# ======= Parâmetros ========
+X_NPY_PATH = 'X.npy'          # caminho do arquivo X.npy (shape: N,10,12,1)
+Y_NPY_PATH = 'Y_classe.npy'   # caminho do arquivo Y_classe.npy (shape: N,26)
+OUTDIR     = 'output'         # diretório de saída
+TEST_SIZE  = 130              # número de amostras no conjunto de teste (últimas 130)
+SEED       = 42              # semente aleatória
+CV_FOLDS   = 5               # número de folds para cross-validation
+
+# Parâmetros para grid search (valores recomendados)
+GRID_HIDDEN   = [50]      # testar maior capacidade de camada oculta
+GRID_LR       = [0.01]  # taxas de aprendizado menores/padrão
+GRID_EPOCHS   = [50]     # épocas para permitir melhor convergência
+GRID_PATIENCE = [5]         # paciências variadas para early stopping
+# ============================
 
 class MLP:
-    """
-    Simple two-layer neural network with tanh hidden activation and softmax output.
-    Supports training by gradient descent with optional early stopping.
-    """
-
-    def __init__(self, n_inputs: int, n_hidden: int, n_outputs: int, learning_rate: float = 0.01, seed: int = None, patience: int = None, max_epochs: int = None):
+    def __init__(self, n_inputs, n_hidden, n_outputs,
+                 learning_rate=0.01, seed=None, patience=None, max_epochs=None):
         if seed is not None:
             np.random.seed(seed)
         self.lr = learning_rate
         self.patience = patience
         self.max_epochs = max_epochs
-
-        # Initialize weights including bias term
+        # pesos com bias
         self.W1 = np.random.randn(n_hidden, n_inputs + 1) * 0.1
         self.W2 = np.random.randn(n_outputs, n_hidden + 1) * 0.1
 
     @staticmethod
-    def _tanh(x: np.ndarray) -> np.ndarray:
+    def _activate_hidden(x):
         return np.tanh(x)
 
     @staticmethod
-    def _tanh_derivative(y: np.ndarray) -> np.ndarray:
-        return 1.0 - np.square(y)
+    def _activate_hidden_derivative(y):
+        return 1.0 - y**2
 
     @staticmethod
-    def _softmax(x: np.ndarray) -> np.ndarray:
-        exps = np.exp(x - np.max(x))
-        return exps / np.sum(exps)
+    def _softmax(x):
+        e_x = np.exp(x - np.max(x))
+        return e_x / e_x.sum()
 
-    def _forward(self, X: np.ndarray) -> np.ndarray:
-        # Hidden layer
-        X_bias = np.append(X, 1.0)
-        z = self._tanh(self.W1.dot(X_bias))
+    def feedforward(self, X):
+        xb = np.append(X, 1.0)
+        self.z = self._activate_hidden(self.W1.dot(xb))
+        zb = np.append(self.z, 1.0)
+        logits = self.W2.dot(zb)
+        self.y = self._softmax(logits)
+        return self.y
 
-        # Output layer
-        z_bias = np.append(z, 1.0)
-        y = self._softmax(self.W2.dot(z_bias))
-
-        # Cache for backprop
-        self._cache = {"X_bias": X_bias, "z": z, "z_bias": z_bias, "y": y}
-        return y
-
-    def _compute_gradients(self, T: np.ndarray) -> tuple:
-        # Retrieve forward pass cache
-        Xb = self._cache["X_bias"]
-        z = self._cache["z"]
-        Zb = self._cache["z_bias"]
-        Y = self._cache["y"]
-
-        # Output error (softmax + cross-entropy)
+    def backprop_step(self, X, T):
+        Y = self.feedforward(X)
+        # cross-entropy gradient: Y - T
         delta_out = Y - T
+        # hidden delta
+        delta_hidden = self._activate_hidden_derivative(self.z) * (self.W2[:, :-1].T.dot(delta_out))
+        # atualiza W2 e W1
+        self.W2 -= self.lr * np.outer(delta_out, np.append(self.z, 1.0))
+        self.W1 -= self.lr * np.outer(delta_hidden, np.append(X, 1.0))
+        # retorna cross-entropy loss
+        return -np.sum(T * np.log(Y + 1e-15))
 
-        # Hidden error
-        grad_z = self._tanh_derivative(z)
-        delta_hidden = grad_z * (self.W2[:, :-1].T.dot(delta_out))
-
-        # Weight gradients
-        grad_W2 = np.outer(delta_out, Zb)
-        grad_W1 = np.outer(delta_hidden, Xb)
-
-        return grad_W1, grad_W2
-
-    def train(self, X_train: np.ndarray, Y_train: np.ndarray, X_val: np.ndarray = None, Y_val: np.ndarray = None) -> tuple:
-        """
-        Train the network with gradient descent.
-        Returns final training loss and validation loss.
-        """
-        best_val_loss = float("inf")
+    def train(self, X_train, Y_train, X_val=None, Y_val=None):
+        best_val = float('inf')
         epochs_no_improve = 0
-
         for epoch in range(1, self.max_epochs + 1):
-            total_loss = 0.0
-            for X, T in zip(X_train, Y_train):
-                # Forward
-                self._forward(X)
-                # Compute gradients
-                grad_W1, grad_W2 = self._compute_gradients(T)
-                # Update weights
-                self.W1 -= self.lr * grad_W1
-                self.W2 -= self.lr * grad_W2
-                # Loss (cross-entropy)
-                total_loss += -np.sum(T * np.log(self._cache['y'] + 1e-15))
-
-            # Early stopping on validation set
+            train_loss = 0.0
+            for x, t in zip(X_train, Y_train):
+                train_loss += self.backprop_step(x, t)
+            val_loss = None
             if X_val is not None:
-                val_loss = self.evaluate_loss(X_val, Y_val)
-                if self.patience:
-                    if val_loss < best_val_loss:
-                        best_val_loss = val_loss
-                        epochs_no_improve = 0
-                        best_weights = (self.W1.copy(), self.W2.copy())
-                    else:
-                        epochs_no_improve += 1
-                    if epochs_no_improve >= self.patience:
-                        self.W1, self.W2 = best_weights
-                        break
-            else:
-                val_loss = None
+                val_loss = sum(-np.sum(t * np.log(self.feedforward(x) + 1e-15))
+                               for x, t in zip(X_val, Y_val))
+                if self.patience and val_loss < best_val:
+                    best_val, epochs_no_improve = val_loss, 0
+                    bestW1, bestW2 = self.W1.copy(), self.W2.copy()
+                else:
+                    epochs_no_improve += 1
+                if self.patience and epochs_no_improve >= self.patience:
+                    self.W1, self.W2 = bestW1, bestW2
+                    break
+            logging.info(f"Epoch {epoch}/{self.max_epochs} - train_loss: {train_loss:.4f}" + (f", val_loss: {val_loss:.4f}" if val_loss is not None else ''))
+        return train_loss, val_loss
 
-        return total_loss, val_loss
+    def predict(self, X):
+        out = self.feedforward(X)
+        # retorna one-hot com 1 na maior probabilidade
+        vec = np.zeros_like(out)
+        vec[np.argmax(out)] = 1
+        return vec
 
-    def evaluate_loss(self, X: np.ndarray, Y: np.ndarray) -> float:
-        """Compute average cross-entropy loss on given data."""
-        losses = []
-        for x, t in zip(X, Y):
-            y = self._forward(x)
-            losses.append(-np.sum(t * np.log(y + 1e-15)))
-        return float(np.mean(losses))
-
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        """Predict one-hot encoded class vector."""
-        y = self._forward(X)
-        pred = np.zeros_like(y)
-        pred[np.argmax(y)] = 1
-        return pred
-
-    def predict_batch(self, X: np.ndarray) -> np.ndarray:
+    def predict_batch(self, X):
         return np.array([self.predict(x) for x in X])
 
-
-# === Data utilities ===
-
-def load_and_preprocess(x_path: str, y_path: str) -> tuple:
-    """Load .npy arrays, flatten features, normalize, encode labels to {-1, 1}."""
-    X = np.load(x_path)  # shape (N, 10, 12, 1)
-    Y = np.load(y_path)  # shape (N, 26)
-
+# carregamento e pré-processamento
+def load_data():
+    X = np.load(X_NPY_PATH)
+    Y = np.load(Y_NPY_PATH)
     N = X.shape[0]
     X = X.reshape(N, -1)
     X = (X - X.mean(axis=0)) / X.std(axis=0)
-
-    # Add bias term in feature matrix
-    X = np.hstack([np.ones((N, 1)), X])
-
-    # Encode labels {>0: 1, else: -1}
-    Y = np.where(Y > 0, 1, -1)
+    # assume Y já one-hot de 0/1; converte para floats
+    Y = Y.astype(float)
     return X, Y
 
+# split determinístico: últimos TEST_SIZE para teste
 
-def train_test_split(X: np.ndarray, Y: np.ndarray, test_ratio: float, seed: int) -> tuple:
-    """Split data into train and test sets."""
-    np.random.seed(seed)
-    indices = np.random.permutation(len(X))
-    split = int(len(X) * (1 - test_ratio))
-    train_idx, test_idx = indices[:split], indices[split:]
-    return X[train_idx], Y[train_idx], X[test_idx], Y[test_idx]
+def train_test_split(X, Y, test_size):
+    X_test = X[-test_size:]
+    Y_test = Y[-test_size:]
+    X_train = X[:-test_size]
+    Y_train = Y[:-test_size]
+    return X_train, Y_train, X_test, Y_test
 
+# cross-validation manual
 
-def evaluate_and_save(model: MLP, X_test: np.ndarray, Y_test: np.ndarray, prefix: str) -> tuple:
-    """Compute confusion matrix, accuracy, and save results to files."""
-    predictions = model.predict_batch(X_test)
-    n_classes = Y_test.shape[1]
-    cm = np.zeros((n_classes, n_classes), dtype=int)
-
-    for true_vec, pred_vec in zip(Y_test, predictions):
-        true_idx = np.argmax(true_vec)
-        pred_idx = np.argmax(pred_vec)
-        cm[true_idx, pred_idx] += 1
-
-    os.makedirs(os.path.dirname(prefix), exist_ok=True)
-    np.savetxt(f"{prefix}_confusion_matrix.csv", cm, delimiter=",", fmt="%d")
-
-    accuracy = np.mean((predictions == Y_test).all(axis=1))
-    with open(f"{prefix}_accuracy.txt", "w") as f:
-        f.write(f"accuracy: {accuracy:.4f}\n")
-
-    return cm, accuracy
-
-
-def cross_validate(X: np.ndarray, Y: np.ndarray, params: dict, folds: int, seed: int) -> float:
-    """Manual k-fold cross-validation returning average accuracy."""
-    N = len(X)
+def cross_validate(X, Y, params):
+    N = X.shape[0]
     indices = np.arange(N)
-    np.random.seed(seed)
+    np.random.seed(SEED)
     np.random.shuffle(indices)
-
-    fold_sizes = np.full(folds, N // folds, dtype=int)
-    fold_sizes[: N % folds] += 1
-
+    fold_sizes = (N // CV_FOLDS) * np.ones(CV_FOLDS, int)
+    fold_sizes[:N % CV_FOLDS] += 1
     current = 0
-    accuracies = []
-    for size in fold_sizes:
-        start, stop = current, current + size
+    scores = []
+    for fold_size in fold_sizes:
+        start, stop = current, current + fold_size
         val_idx = indices[start:stop]
         train_idx = np.concatenate((indices[:start], indices[stop:]))
-
         X_tr, Y_tr = X[train_idx], Y[train_idx]
         X_val, Y_val = X[val_idx], Y[val_idx]
-
-        model = MLP(n_inputs=X.shape[1], n_hidden=params['hidden'], n_outputs=Y.shape[1], learning_rate=params['lr'], seed=seed, patience=params['patience'], max_epochs=params['epochs'])
+        model = MLP(X.shape[1], params['hidden'], Y.shape[1],
+                    params['lr'], SEED, params['patience'], params['epochs'])
         model.train(X_tr, Y_tr, X_val, Y_val)
-        preds = model.predict_batch(X_val)
-        acc = np.mean((preds == Y_val).all(axis=1))
-        accuracies.append(acc)
+        acc = np.mean((model.predict_batch(X_val) == Y_val).all(axis=1))
+        scores.append(acc)
         current = stop
+    return np.mean(scores)
 
-    return float(np.mean(accuracies))
-
-
-def grid_search(X: np.ndarray, Y: np.ndarray, config: dict) -> dict:
-    """Perform grid search over hyperparameters and save results."""
+# grid search com cross-validation
+def grid_search(X, Y):
     results = []
-    param_grid = product(config['GRID_HIDDEN'], config['GRID_LR'], config['GRID_EPOCHS'], config['GRID_PATIENCE'])
-
-    for hidden, lr, epochs, patience in param_grid:
-        params = {'hidden': hidden, 'lr': lr, 'epochs': epochs, 'patience': patience}
-        cv_score = cross_validate(X, Y, params, config['CV_FOLDS'], config['SEED'])
-        results.append({**params, 'cv_accuracy': cv_score})
-
-    # Save grid results
-    os.makedirs(config['OUTPUT_DIR'], exist_ok=True)
+    for hidden, lr, epochs, pat in product(GRID_HIDDEN, GRID_LR, GRID_EPOCHS, GRID_PATIENCE):
+        params = {'hidden':hidden, 'lr':lr, 'epochs':epochs, 'patience':pat}
+        cv_score = cross_validate(X, Y, params)
+        results.append({**params, 'cv_acc':cv_score})
+    os.makedirs(OUTDIR, exist_ok=True)
     keys = results[0].keys()
-    with open(os.path.join(config['OUTPUT_DIR'], 'grid_search.csv'), 'w', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=keys)
-        writer.writeheader()
-        writer.writerows(results)
-
-    best = max(results, key=lambda r: r['cv_accuracy'])
-    logging.info(f"Best CV configuration: {best}")
+    with open(os.path.join(OUTDIR, 'grid_search.csv'), 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=keys)
+        writer.writeheader(); writer.writerows(results)
+    best = max(results, key=lambda x: x['cv_acc'])
+    logging.info(f"Best CV config: {best}")
     return best
 
+# avaliação e salvamento da matriz de confusão e acurácia
+def evaluate_and_save(model, X_test, Y_test, prefix):
+    preds = model.predict_batch(X_test)
+    n_out = Y_test.shape[1]
+    cm = np.zeros((n_out, n_out), int)
+    for true_v, pred_v in zip(Y_test, preds):
+        i = np.where(true_v == 1)[0][0]
+        j = np.where(pred_v == 1)[0][0]
+        cm[i, j] += 1
+    os.makedirs(os.path.dirname(prefix), exist_ok=True)
+    np.savetxt(prefix + '_confusion_matrix.csv', cm, delimiter=',', fmt='%d')
+    acc = np.mean((preds == Y_test).all(axis=1))
+    with open(prefix + '_accuracy.txt', 'w') as f:
+        f.write(f"accuracy: {acc:.4f}\n")
+    return cm, acc
 
-def main():
-    setup_logger()
-
-    # Load and preprocess data
-    X, Y = load_and_preprocess(CONFIG['X_PATH'], CONFIG['Y_PATH'])
-
-    # Reserve last samples for test (consistent split)
-    X_train, Y_train = X[:-130], Y[:-130]
-    X_test, Y_test = X[-130:], Y[-130:]
-
-    # Hyperparameter tuning
-    best_cfg = grid_search(X_train, Y_train, CONFIG)
-
-    # Final training with best parameters
-    os.makedirs(CONFIG['OUTPUT_DIR'], exist_ok=True)
-    prefix = os.path.join(CONFIG['OUTPUT_DIR'], 'dataset_best')
-
-    model = MLP(n_inputs=X_train.shape[1], n_hidden=best_cfg['hidden'], n_outputs=Y_train.shape[1], learning_rate=best_cfg['lr'], seed=CONFIG['SEED'], patience=best_cfg['patience'], max_epochs=best_cfg['epochs'])
-
-    # Save initial weights
-    np.save(f"{prefix}_weights_initial_W1.npy", model.W1)
-    np.save(f"{prefix}_weights_initial_W2.npy", model.W2)
-
-    # Train model
-    model.train(X_train, Y_train)
-
-    # Save final weights
-    np.save(f"{prefix}_weights_final_W1.npy", model.W1)
-    np.save(f"{prefix}_weights_final_W2.npy", model.W2)
-
-    # Evaluation on test set
-    cm, accuracy = evaluate_and_save(model, X_test, Y_test, prefix)
-    logging.info(f"Test accuracy: {accuracy:.4f}")
-
-
+# fluxo principal
 if __name__ == '__main__':
-    main()
+    os.makedirs(OUTDIR, exist_ok=True)
+    X, Y = load_data()
+    # split: últimos TEST_SIZE para teste
+    X_train, Y_train, X_test, Y_test = train_test_split(X, Y, TEST_SIZE)
+
+    start_grid = time.time()
+    # seleção de hiperparâmetros
+    if USE_CV:
+        best_cfg = grid_search(X_train, Y_train)
+    else:
+        best_cfg = DEFAULT_CFG
+    logging.info(f"Parâmetros selecionados: {best_cfg}")
+
+    # desabilita early stopping se USE_EARLY_STOP=False
+    if not USE_EARLY_STOP:
+        best_cfg['patience'] = None
+
+    # treino final com melhor configuração
+    grid_time = time.time() - start_grid
+    logging.info(f"Grid search concluído em {grid_time:.2f}s")
+    # salva tempo de grid search
+    with open(os.path.join(OUTDIR, 'dataset_best_times.txt'), 'w') as f:
+        f.write(f"grid_search_time: {grid_time:.2f}s\n")
+
+    # grava hiperparâmetros escolhidos incluindo dimensões de entrada/saída
+    n_inputs = X_train.shape[1]
+    n_outputs = Y.shape[1]
+    with open(os.path.join(OUTDIR, 'dataset_best_hyperparams.txt'), 'w') as f:
+        f.write(f"n_inputs: {n_inputs}\n")
+        f.write(f"n_outputs: {n_outputs}\n")
+        for k, v in best_cfg.items():
+            f.write(f"{k}: {v}\n")
+
+    # treino final com melhor configuração
+    model = MLP(X_train.shape[1], best_cfg['hidden'], Y.shape[1],
+                best_cfg['lr'], SEED, best_cfg['patience'], best_cfg['epochs'])
+    # salva e depois treina
+    prefix = os.path.join(OUTDIR, 'dataset_best')
+    np.save(prefix + '_weights_initial_W1.npy', model.W1)
+    np.save(prefix + '_weights_initial_W2.npy', model.W2)
+    start_train = time.time()
+    model.train(X_train, Y_train)
+    train_time = time.time() - start_train
+    logging.info(f"Treino final concluído em {train_time:.2f}s")
+    # anexa tempo de treino final
+    with open(os.path.join(OUTDIR, 'dataset_best_times.txt'), 'a') as f:
+        f.write(f"final_train_time: {train_time:.2f}s")
+    np.save(prefix + '_weights_final_W1.npy', model.W1)
+    np.save(prefix + '_weights_final_W2.npy', model.W2)
+    # avaliação no teste
+    cm, acc = evaluate_and_save(model, X_test, Y_test, prefix)
+    logging.info(f"Test accuracy: {acc:.4f}")
